@@ -1,2 +1,2 @@
 # EndothelialCellTranscriptomeAnalysis
-Project aimed at understanding age-induced endothelial dysfunction through transcriptional reprgramming
+Project aimed at understanding age-induced endothelial dysfunction through transcriptional reprogramming
