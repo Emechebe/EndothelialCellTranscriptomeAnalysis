@@ -1,0 +1,8 @@
+sample_id	file	total_mass	internal_scale	external_scale
+YH_0	/home/exacloud/lustre1/users/emechebe/RNA_SEQ/RNA170124AB/170313_D00735_0186_BCARETANXX/RNA170124AB/RealignTophat2/RNA170124AB_YH1_S1_L001_R1_001/cuffquant_out/abundances.cxb	4.26937e+07	0.880622	1
+YH_1	/home/exacloud/lustre1/users/emechebe/RNA_SEQ/RNA170124AB/170313_D00735_0186_BCARETANXX/RNA170124AB/RealignTophat2/RNA170124AB_YH3_S6_L002_R1_001/cuffquant_out/abundances.cxb	4.23033e+07	0.957699	1
+YH_2	/home/exacloud/lustre1/users/emechebe/RNA_SEQ/RNA170124AB/170313_D00735_0186_BCARETANXX/RNA170124AB/RealignTophat2/RNA170124AB_YH4_S5_L001_R1_001/cuffquant_out/abundances.cxb	4.70527e+07	1.10016	1
+YH_3	/home/exacloud/lustre1/users/emechebe/RNA_SEQ/RNA170124AB/170313_D00735_0186_BCARETANXX/RNA170124AB/RealignTophat2/RNA170124AB_YH4_S5_L004_R1_001/cuffquant_out/abundances.cxb	4.82398e+07	1.12744	1
+OH_0	/home/exacloud/lustre1/users/emechebe/RNA_SEQ/RNA170124AB/170313_D00735_0186_BCARETANXX/RNA170124AB/RealignTophat2/RNA170124AB_OH1_S3_L001_R1_001/cuffquant_out/abundances.cxb	4.18836e+07	0.940128	1
+OH_1	/home/exacloud/lustre1/users/emechebe/RNA_SEQ/RNA170124AB/170313_D00735_0186_BCARETANXX/RNA170124AB/RealignTophat2/RNA170124AB_OH3_S9_L002_R1_001/cuffquant_out/abundances.cxb	4.81979e+07	1.10169	1
+OH_2	/home/exacloud/lustre1/users/emechebe/RNA_SEQ/RNA170124AB/170313_D00735_0186_BCARETANXX/RNA170124AB/RealignTophat2/RNA170124AB_OH4_S17_L004_R1_001/cuffquant_out/abundances.cxb	4.32029e+07	0.99206	1
