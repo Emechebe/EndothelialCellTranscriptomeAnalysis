@@ -1,0 +1,30 @@
+---
+title: "SingleCellTutorial2015"
+author: "Uchenna Emechebe"
+date: "12/11/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# https://hms-dbmi.github.io/scw/heterogeneity.html
+
+# The dataset used in this tutorial came from Camp et al 2015 with accession number
+# GSE75140. Downloaded the expression data as a text file 
+```{r}
+# read in expression data
+Data = read.table('GSE75140_hOrg.fetal.master.data.frame.txt',header = T)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

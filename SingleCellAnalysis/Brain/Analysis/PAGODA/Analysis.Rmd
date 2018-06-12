@@ -1,0 +1,364 @@
+---
+title: "Clustering of combined young and aged brain endothelial cells "
+output: html_document
+---
+# https://hms-dbmi.github.io/scw/heterogeneity.html
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# I have merged the gene matrices of young and aged brain endothelial cells
+# Load the libraries and the data
+```{r cars}
+# read in the expression matrix
+Combined = read.csv("Combined.csv",row.names=1)
+# Sanity check
+Combined[1:3,1:3]
+# The csv files contains Cells as columns and Genes (features) in rows
+# Size of data set is 1417 Cells and 27998 Genes
+dim(Combined)
+# Lets save the cell names of this dataset to be used to create the annotation file
+Names = colnames(Combined)
+# This has genes as rows (~27k) and cells as columns (1417)
+# I created an annotation that has 1 column, CellType and 1417 rows. Each row matches each column in the
+# Combined data and describes each of these cells as either Young nor Old
+# Read in the annotation file
+AnnotationFile = read.csv('CellAnnotation.csv',row.names=1)
+# Sanity check
+dim(AnnotationFile)
+head(AnnotationFile)
+tail(AnnotationFile)
+# The annotation file has rownames as sequential indexes. 
+# Reformat the annotation file to have the cell names from the combined as rownames
+# Add the Names from Combined data as another column in the annotation file
+AnnotationFile1 = cbind(AnnotationFile,'CellNames'= Names)
+# Sanity check
+head(AnnotationFile1)
+# Now make this CellNames column as the row names
+rownames(AnnotationFile1) = AnnotationFile1$CellNames
+# Sanity check
+head(AnnotationFile1)
+# Now drop the redundant CellNames column
+library(dplyr)
+AnnotationFile2 = AnnotationFile1 %>% select(-CellNames)
+# Sanity check
+head(AnnotationFile2)
+```
+
+# Filter out low-gene cells as well as genes that dont have enough reads
+```{r}
+# low-gene cells. Did not run this
+# Combined1 = Combined[,colSums(Combined>0)>1.83e3]
+# Genes not seen in sufficient number of cells. I ran this
+Combined2 <- Combined[rowSums(Combined>0)>5, ]
+# Applying the above filter reduced the number of genes from 27998 to 11147
+
+# Transform data. We use a log10 transformation
+mat = log10(as.matrix(Combined2)+1)
+# Sanity check
+mat[1:5,1:5]
+
+# Run PCA
+base.pca <- prcomp(t(mat))
+
+# visualize in 2D the first two principal components and color by cell type
+plot(base.pca$x[,1], base.pca$x[,2], col=AnnotationFile2$CellType, pch=16, main='PCA')
+
+
+# Tsne
+library(Rtsne)
+d <- dist(t(mat))
+set.seed(0)
+tsne_out <- Rtsne(d, is_distance=TRUE, perplexity=10, verbose = TRUE)
+plot(tsne_out$Y, col=AnnotationFile2$CellType, pch=16, main='tSNE')
+
+
+
+# In general, the clusters from these tSNE results are not particularly clear-cut. Still, we may be wondering what genes and pathways characterize these subpopulation? For that, additional analysis is often needed and dimensionality reduction alone does not provide us with such insight.
+
+# PAGODA is a method developed by the Kharchenko lab that enables identification and characterization of subpopulations in a manner that resolves these overlapping aspects of transcriptional heterogeneity. For more information, please refer to the original manuscript by Fan et al. PAGODA functions are implemented as part of the scde package.
+
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("scde")
+# library(scde)
+require(devtools)
+install_version("flexmix", version = "2.3-13", repos = "http://cran.us.r-project.org")
+
+# Install this scde version since the bioconductor version has issues
+# Download scde-1.99.2.tar from  https://github.com/hms-dbmi/scde/releases
+# And run this in a terminal
+# R CMD INSTALL scde-1.99.2.tar
+# Now load the lib
+library(scde)
+#knn <- knn.error.models(Combined2, k = ncol(Combined2)/4, n.cores = 1, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 10)
+
+# No need to run this. It takes amost 45 minutes.I ran it and saved
+# the pre computed results, so you can just load that
+knn <- knn.error.models(Combined2, k = ncol(Combined2)/5, n.cores = 1, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 5, save.model.plots = TRUE, verbose = 1) 
+# saving the precomputed results. So just load that
+save(knn,file='knn.Rdata')
+load('knn.Rdata')
+# This takes 30 mins to run. Or you can just load the pre computed results
+varinfo <- pagoda.varnorm(knn, counts = Combined2, trim = 3/ncol(Combined2), max.adj.var = 5, n.cores = 1, plot = TRUE,verbose = 1)
+save(varinfo,file='varinfo.Rdata')
+load('varinfo.Rdata')
+
+# This is fast. So run this. Takes two seconds
+varinfo <- pagoda.subtract.aspect(varinfo, colSums(Combined2[, rownames(knn)]>0))
+
+# Create the Mus annotation
+source("https://bioconductor.org/biocLite.R")
+biocLite("org.Mm.eg.db")
+library(org.Mm.eg.db)
+ids <- unlist(lapply(mget(rownames(Combined2), org.Mm.egALIAS2EG, ifnotfound = NA), function(x) x[1]))
+rids <- names(ids)
+names(rids) <- ids
+go.env <- eapply(org.Mm.egGO2ALLEGS, function(x) as.character(na.omit(rids[x])))
+go.env <- go.env[unlist(lapply(go.env, length))>5]
+
+biocLite("GO.db")
+library(GO.db)
+desc <- unlist(lapply(mget(names(go.env), GOTERM, ifnotfound = NA), function(x) if(is.logical(x)) { return("") } else { slot(x, "Term")}))
+names(go.env) <- paste(names(go.env), desc)
+go.env <- list2env(go.env) 
+# look at some gene sets
+head(ls(go.env))
+# look at genes in gene set
+get("GO:0000002 mitochondrial genome maintenance", go.env)
+
+# filter out gene sets that are too small or too big
+go.env <- list2env(clean.gos(go.env, min.size=10, max.size=100))
+# how many pathways
+length(go.env)
+
+# pathway overdispersion
+# Dont run this. Takes hours to run.
+# Just load the saved pre computed results
+pwpca <- pagoda.pathway.wPCA(varinfo, go.env, n.components = 1, n.cores = 1,verbose = 1)
+# Saving the pwpca result
+save(pwpca,file='pwpca.Rdata')
+load('pwpca.Rdata')
+# de novo gene sets
+# Dont run this. Takes hours.
+# Saved the computed results
+clpca <- pagoda.gene.clusters(varinfo, trim = 7.1/ncol(varinfo$mat), n.clusters = 150, n.cores = 1, plot = FALSE)
+# Saving the clpca result
+save(clpca,file='clpca.Rdata')
+load('clpca.Rdata')
+
+# Taking into consideration both pre-defined pathways and de-novo gene sets, we can see which aspects of heterogeneity are the most overdispersed and base our cell cluster only on the most overdispersed and informative pathways and gene sets.
+
+# get full info on the top aspects
+df <- pagoda.top.aspects(pwpca, clpca, z.score = 1.96, return.table = TRUE)
+head(df)
+tam <- pagoda.top.aspects(pwpca, clpca, z.score = 1.96)
+# determine overall cell clustering
+hc <- pagoda.cluster.cells(tam, varinfo)
+
+#Because many of our annotated pathways and de novo gene sets likely 
+#share many genes or exhibit similar patterns of variability,we must 
+# reduce such redundancy to come up with a 
+# final coherent characterization of subpopulations.
+# reduce redundant aspects
+tamr <- pagoda.reduce.loading.redundancy(tam, pwpca, clpca)
+tamr2 <- pagoda.reduce.redundancy(tamr, plot = FALSE)
+# View the clusters using a heat map.
+# This returns the top 10 gene clusters used for clustering. 
+# The annotation is by CellType (young or old)
+pagoda.view.aspects(tamr2, cell.clustering = hc, box = TRUE, labCol = NA, margins = c(0.5, 20), col.cols = rbind(col=AnnotationFile2$CellType), top=10)
+# Add a second layer of annotation by highlighting the clusters of cells identified
+# My first pass is to assume 8 clusters in the population.
+# So use the cuttree function to delineate these clusters
+col.cols <- rbind(groups = cutree(hc, 8))
+# Now re run the analysis
+pagoda.view.aspects(tamr2, cell.clustering = hc, box = TRUE, labCol = NA, margins = c(0.5, 20), col.cols = rbind(col.cols,AnnotationFile2$CellType),top=20)
+# I used 8 clusters. I can speculate that there might be 12 clusters. So run the clusters
+# Note that the default color palette is 8. So the colors will be recycled for clusters
+# I will come back to this later and increase the length of the color palette
+col.cols <- rbind(groups = cutree(hc, 12))
+pagoda.view.aspects(tamr2, cell.clustering = hc, box = TRUE, labCol = NA, margins = c(0.5, 20), col.cols = rbind(col.cols,AnnotationFile2$CellType),top=20)
+
+
+# Lets explore the geneClusters that were the most significant 
+# for classifying cells. 
+
+pagoda.show.pathways(clpca$clusters$geneCluster.74, varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+pagoda.show.pathways(clpca$clusters$geneCluster.110, varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+pagoda.show.pathways(clpca$clusters$geneCluster.28, varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+pagoda.show.pathways(clpca$clusters$geneCluster.135, varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+pagoda.show.pathways(clpca$clusters$geneCluster.108, varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+
+
+pagoda.show.pathways(c("GO:0043518 negative regulation of DNA damage response, signal transduction by p53 class mediator"), varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(c("GO:0002902 regulation of B cell apoptotic process"), varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(clpca$clusters$geneCluster.147, varinfo, clpca, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(c("GO:1902624 positive regulation of neutrophil migration"), varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(c("GO:0043368 positive T cell selection"), varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(c("GO:0045061 thymic T cell selection"), varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(clpca$clusters$geneCluster.93, varinfo, clpca, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(clpca$clusters$geneCluster.136, varinfo, clpca, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(c("GO:1990777 lipoprotein particle"), varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(clpca$clusters$geneCluster.137, varinfo, clpca, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(c("GO:0004601 peroxidase activity"), varinfo, go.env, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(clpca$clusters$geneCluster.98, varinfo, clpca, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(clpca$clusters$geneCluster.79, varinfo, clpca, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(clpca$clusters$geneCluster.55, varinfo, clpca, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+pagoda.show.pathways(clpca$clusters$geneCluster.68, varinfo, clpca, cell.clustering = hc, margins = c(1,5), show.cell.dendrogram = TRUE, showRowLabels = TRUE, showPC = TRUE)
+
+# Controlling for undesired aspects of heterogeneity
+# Depending on the biological setting, certain dominant aspects of transcriptional heterogeneity may not be of interest.
+# I will be needing that later
+#http://hms-dbmi.github.io/scde/pagoda.html
+
+
+# We can also visualize some known markers using this call
+# visualize a few known markers
+# I have not modified this to suit our data set but will do that later
+# Code from https://hms-dbmi.github.io/scw/heterogeneity.html
+markers <- c(
+    "SCN2A","GRIK3","CDH6","NRCAM","SOX11",
+    "SLC24A2", "SOX4", "DCX", "TUBB3","MAPT",
+    "KHDRBS3",  "KHDRBS2", "KHDRBS1", "RBFOX3",
+    "CELF6", "CELF5", "CELF4", "CELF3", "CELF2", "CELF1",
+    "PTBP2", "PTBP1", "ZFP36L2",
+    "HMGN2", "PAX6", "SFRP1",
+    "SOX2", "HES1", "NOTCH2", "CLU","HOPX",
+    "MKI67","TPX2",
+    "EOMES", "NEUROD4","HES6"
+    )
+# heatmap for subset of gene markers
+mat.sub <- varinfo$mat[markers,]
+range(mat.sub)
+
+## [1] -4.346477  3.805928
+
+mat.sub[mat.sub < -1] <- -1
+mat.sub[mat.sub > 1] <- 1
+heatmap(mat.sub[,hc$labels], Colv=as.dendrogram(hc), Rowv=NA, scale="none", col=colorRampPalette(c("blue", "white", "red"))(100), ColSideColors=rainbow(2)[sg])
+
+# Also determine differential gene expression between clusters. That will all be done soon.
+
+
+
+library(Rtsne)
+# recalculate clustering distance .. we'll need to specify return.details=T
+cell.clustering <- pagoda.cluster.cells(tam, varinfo, include.aspects=TRUE, verbose=TRUE, return.details=T)
+# fix the seed to ensure reproducible results
+set.seed(0)
+# Cluster using various parameters
+tSNE.pagoda <- Rtsne(cell.clustering$distance, is_distance=TRUE, perplexity=10)
+tSNE.pagoda1 <- Rtsne(cell.clustering$distance, is_distance=TRUE, perplexity=30,theta=0.1)
+tsne_model_1 = Rtsne(cell.clustering$distance, check_duplicates=FALSE, pca=TRUE, perplexity=30, theta=0.5, dims=2)
+# plot
+par(mfrow=c(1,1), mar = rep(5,4))
+plot(tSNE.pagoda$Y, col=AnnotationFile2$CellType, pch=16, main='PAGODA tSNE')
+plot(tSNE.pagoda$Y, pch=16, main='PAGODA tSNE')
+
+plot(tSNE.pagoda1$Y, col=AnnotationFile2$CellType, pch=16, main='PAGODA tSNE')
+plot(tSNE.pagoda1$Y, pch=16, main='PAGODA tSNE')
+
+plot(tsne_model_1$Y, col=AnnotationFile2$CellType, pch=16, main='PAGODA tSNE')
+plot(tsne_model_1$Y, pch=16, main='PAGODA tSNE')
+
+# Exploring the clusters from the tsne
+# https://blog.datascienceheroes.com/playing-with-dimensions-from-clustering-pca-t-sne-to-carl-sagan/
+# This will create the k-means and the hierarchical cluster models and assign the cluster number to
+# which input case it belongs
+## getting the two dimension matrix
+d_tsne_1 = as.data.frame(tSNE.pagoda1$Y) 
+## keeping original data
+# This contains the two dimension tsne summary of each cell
+d_tsne_1_original=d_tsne_1
+## Creating k-means clustering model, and assigning the result to the data used to create the tsne
+fit_cluster_kmeans=kmeans(scale(d_tsne_1), 8)
+# Here we add the k means cluster labels for every cell in this data set
+d_tsne_1_original$cl_kmeans = factor(fit_cluster_kmeans$cluster)
+## Creating hierarchical cluster model, and assigning the result to the data used to create the tsne
+fit_cluster_hierarchical=hclust(dist(scale(d_tsne_1)))
+# Here we add the hierarchical cluster labels for every cell in this data set
+d_tsne_1_original$cl_hierarchical = factor(cutree(fit_cluster_hierarchical, k=8))
+# I also decided to add the CellNames to this dataframe
+d_tsne_1_original$CellNames = rownames(AnnotationFile2)
+# Make that the row names
+rownames(d_tsne_1_original) = d_tsne_1_original$CellNames
+# Now I can save each cell and its corresponding cluster
+write.csv(d_tsne_1_original,'CellClusters.csv')
+
+# This function plots the results of each model based on the tsne map
+plot_cluster=function(data, var_cluster, palette)  
+{
+     ggplot(data, aes_string(x="V1", y="V2", color=var_cluster)) +
+         geom_point(size=1.5) +
+         guides(colour=guide_legend(override.aes=list(size=6))) +
+        xlab("") + ylab("") +
+         ggtitle("") +
+        theme_light(base_size=20) +
+        theme(axis.text.x=element_blank(),
+              axis.text.y=element_blank(),
+              legend.direction = "horizontal", 
+               legend.position = "bottom",
+               legend.box = "horizontal") + 
+         scale_colour_brewer(palette = palette) 
+}
+
+library(ggplot2)
+plot_k=plot_cluster(d_tsne_1_original, "cl_kmeans", "Accent") 
+plot_h=plot_cluster(d_tsne_1_original, "cl_hierarchical", "Set1")
+library(gridExtra)  
+grid.arrange(plot_k, plot_h,  ncol=2)
+
+
+
+# I wanted to run a Pseudo-time trajectory analysis from this tutorial using 
+# monocle. Turns out that monocle recieves input as fpkm. We should have the 
+# counts and we can use that to get fpkm. 
+
+# This is a tutorial for GSEA, check that out
+# https://github.com/JEFworks/liger
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
