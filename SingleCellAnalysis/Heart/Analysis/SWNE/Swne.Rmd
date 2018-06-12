@@ -1,0 +1,325 @@
+---
+title: "Clustering of combined young and aged cardiac endothelial cells "
+output: html_document
+---
+# I have merged the gene matrices of young and aged brain endothelial cells
+# Load the libraries and the data
+# https://yanwu2014.github.io/swne/Examples/pbmc3k_swne_seurat.html
+```{r}
+# setwd("/Volumes/Uchenna_MacDesk/UchennaDesktop/Desktop/BarnesLab/SingleCellRNASeq/YoungCardiacOldCardiacEndothelialCells/Project_CEL171114AB_Data/Combined_Cardiac")
+library(Seurat)
+library(cowplot)
+library(swne)
+
+# read in the expression matrix
+Combined = read.csv("Combined.csv",row.names=1)
+# Sanity check
+dim(Combined)
+Combined[1:3,1:3]
+# The csv files contains Cells as columns and Genes (features) in rows
+# Size of data set is 4348 Cells and 27998 Genes
+# Lets save the cell names of this dataset to be used to create the annotation file
+Names = colnames(Combined)
+# This has genes as rows (~27k) and cells as columns (4348)
+# I created an annotation that has 1 column, CellType and 4348 rows. Each row matches each column in the
+# Combined data and describes each of these cells as either Young nor Old
+# Read in the annotation file
+AnnotationFile = read.csv('CellAnnotation.csv',row.names=1)
+# Sanity check
+dim(AnnotationFile)
+head(AnnotationFile)
+tail(AnnotationFile)
+# The annotation file has rownames as sequential indexes. 
+# Reformat the annotation file to have the cell names from the combined as rownames
+# Add the Names from Combined data as another column in the annotation file
+AnnotationFile1 = cbind(AnnotationFile,'CellNames'= Names)
+# Sanity check
+head(AnnotationFile1)
+# Now make this CellNames column as the row names
+rownames(AnnotationFile1) = AnnotationFile1$CellNames
+# Sanity check
+head(AnnotationFile1)
+# Now drop the redundant CellNames column
+library(dplyr)
+AnnotationFile2 = AnnotationFile1 %>% select(-CellNames)
+# Sanity check
+head(AnnotationFile2)
+```
+
+# Create a Seurat object
+```{r}
+# First make the expression data as a sparse data frame to speed up computation. 
+# Our combined data is not numeric, so convert the data frame to numeric
+Combined1 = data.matrix(Combined)
+# Then convert to a sparse matrix
+expression.data <- Matrix(Combined1, sparse = T)
+# Sanity check
+expression.data[1:3,1:3]
+
+
+# Generating Seurat Object
+se.obj <- CreateSeuratObject(raw.data = expression.data, min.cells = 3, min.genes = 200, 
+    project = "10X_old")
+
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = se.obj@data), value = TRUE)
+
+percent.mito <- Matrix::colSums(se.obj@raw.data[mito.genes, ])/Matrix::colSums(se.obj@raw.data)
+# Add percent.mito to the metadata
+se.obj1 <- AddMetaData(object = se.obj, metadata = percent.mito, col.name = "percent.mito")
+# Also add the cell annotation as part of the metadata
+se.obj2 = AddMetaData(object=se.obj1,metadata = AnnotationFile2)
+# This threw up a warning. Understand that warning. The plot is also kinda different from the plot from the tutorial;
+# The warning is that all cells have the same value of feature
+VlnPlot(object = se.obj2, features.plot = c("nGene", "nUMI", "percent.mito"), nCol = 3)
+
+# We filter out cells that have unique gene counts over 2,500 or less than
+# 200 Note that low.thresholds and high.thresholds are used to define a
+# 'gate' -Inf and Inf should be used if you don't want a lower or upper
+# threshold.
+se.obj3 <- FilterCells(object = se.obj2, subset.names = c("nGene", "percent.mito"), 
+    low.thresholds = c(200, -Inf), high.thresholds = c(2500, 0.05))
+# Normalizing the data
+se.obj4 <- NormalizeData(object = se.obj3, normalization.method = "LogNormalize", 
+    scale.factor = 10000)
+# Detection of variable genes across the single cells
+se.obj5 <- FindVariableGenes(object = se.obj4, mean.function = ExpMean, dispersion.function = LogVMR, 
+    x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
+# Found 1526 variable genes
+length(x = se.obj5@var.genes)
+#Scaling the data and removing unwanted sources of variation
+se.obj6 <- ScaleData(object = se.obj5, vars.to.regress = c("nUMI", "percent.mito"))
+# Perform a linear dimension reduction on the scaled data
+se.obj7 <- RunPCA(object = se.obj6, pc.genes = se.obj6@var.genes, do.print = TRUE, pcs.print = 1:5, 
+    genes.print = 5)
+# Using the dimensions 1 to 10 to discover clusters with a resolution of 0.6. 
+# Increasing this resolution up to 1.2 will increase the number of clusters discovered
+# So this might be something I should explore later.
+se.obj8 <- FindClusters(object = se.obj7, reduction.type = "pca", dims.use = 1:10, 
+    resolution = 0.6, print.output = 0, save.SNN = TRUE)
+
+# Now run the Tsne
+se.obj9 <- RunTSNE(object = se.obj8, dims.use = 1:10, do.fast = TRUE)
+
+# Plot the Tsne
+TSNEPlot(object = se.obj9,do.label=TRUE)
+# Lets switch the id to CellType so we can cluster by young or old
+se.obj10 <- SetAllIdent(object = se.obj9, id = "CellType")
+# Plot
+TSNEPlot(object = se.obj10)
+
+# SWNE Analysis with Seurat Object
+# Pull out the raw counts, filter cells and genes, and trim each gene to reduce outliers
+counts <- as(se.obj10@raw.data, "dgCMatrix")[,se.obj10@cell.names]
+counts <- FilterData(counts, min.samples.frac = 0.0025, min.nonzero.features = 200, trim = 0.001)
+dim(counts)
+# Have 11582 genes (rows) and 4207 cells (columns)
+# We need to scale the data and adjust gene variance, while keeping the scaled matrix nonnegative.
+norm.counts <- ScaleCounts(counts, batch = NULL, method = "log", adj.var = T)
+# Most scRNA-seq pipelines only use a subset of highly overdispersed genes for analysis. We’ll pull out those variable genes here, as well as the cluster labels.
+## Pull out overdispersed genes as defined by Seurat
+var.genes <- intersect(se.obj10@var.genes, rownames(counts))
+length(var.genes)
+## Pull out cell clusters as defined by Seurat
+# I am using the se.obj9 to point to the cell clusters.
+cell.clusters <- se.obj9@ident; 
+names(cell.clusters) <- se.obj9@cell.names;
+levels(cell.clusters)
+# Here this shows that we have 10 clusters
+
+## Note that an alternative is to point to se.obj10 whose identity has 
+# been set to age status
+#cell.clusters <- se.obj10@ident; 
+#names(cell.clusters) <- se.obj10@cell.names;
+#levels(cell.clusters)
+
+
+# Set some key parameters. The loss function defines what type of error metric the NMF algorithm will use. We typically use the mean squared error (mse). Another metric is the mean KL divergence (mkl). Also defines the number of cores to use.
+loss <- "mse" ## Loss function
+n.cores <- 1 ## Number of cores to use
+
+# We use the FindNumFactors function to identify the optimal number of factors to use. This function can be slow for large datasets, since it iterates over different values of k, so a simple “hack” is to just set k equal to the number of significant principal components.
+k.range <- seq(2,20,2) ## Range of factors to iterate over
+k.res <- FindNumFactors(norm.counts[var.genes,], k.range = k.range, n.cores = n.cores, do.plot = T, loss = loss)
+k.res$k
+# The optimal k seems to be 12
+
+# We then run the NMF decomposition. We can initialize the NMF using either Independent Component Analysis (ica), Nonnegative SVD (nnsvd), or a completely random initialization. The output of RunNMF is a list of the gene loadings (W) and NMF embedding (H).
+k <- 12
+nmf.res <- RunNMF(norm.counts[var.genes,], k = k, alpha = 0, init = "ica", n.cores = n.cores, loss = loss)
+nmf.scores <- nmf.res$H
+# We can either use the pre-computed Shared Nearest Neighbors (SNN) matrix from Seurat or re-compute it ourselves.
+# pc.scores <- t(GetCellEmbeddings(se.obj, reduction.type = "pca", dims.use = 1:k))
+# snn <- CalcSNN(pc.scores)
+snn <- se.obj9@snn
+# Runs the SWNE embedding. The three key parameters are alpha.exp, snn.exp, and n_pull, which control how the factors and neighboring cells affect the cell coordinates.
+alpha.exp <- 1.25 # Increase this > 1.0 to move the cells closer to the factors. Values > 2 start to distort the data.
+snn.exp <- 1.0 # Lower this < 1.0 to move similar cells closer to each other
+n_pull <- 4 # The number of factors pulling on each cell. Must be at least 3.
+swne.embedding <- EmbedSWNE(nmf.scores, snn, alpha.exp = alpha.exp, snn.exp = snn.exp,n_pull = n_pull, dist.use = "IC")
+
+# We can make a “raw” SWNE plot with all the factors displayed. We set a seed for reproducible cluster colors, so that every plot will use the same colors to label the clusters.
+color.seed <- 32566 ## Set seed for cluster colors
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T,label.size = 3.5, pt.size = 1.25, show.legend = T, seed = color.seed)
+
+# For now, let’s hide the factors by setting their names to the empty string "". We’ll interpret them later
+swne.embedding$H.coords$name <- ""
+#Since we only ran NMF on the overdispersed genes, we need to project the rest of the genes onto the NMF projection to get gene loadings for all genes.
+nmf.res$W <- ProjectFeatures(norm.counts, nmf.scores, loss = loss, n.cores = n.cores)
+
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Switch the cell clusters to point to Young_Old annotation
+cell.clusters <- se.obj10@ident; 
+names(cell.clusters) <- se.obj10@cell.names;
+levels(cell.clusters)
+# Replot Swne plot with the Young_Aged Annotation
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+
+# Re annotate with cell clusters
+cell.clusters <- se.obj9@ident; 
+names(cell.clusters) <- se.obj9@cell.names;
+levels(cell.clusters)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# We can also make a t-SNE plot for comparison.
+tsne.scores <- GetCellEmbeddings(se.obj9, reduction.type = "tsne")
+PlotDims(tsne.scores, sample.groups = cell.clusters, pt.size = 1, label.size = 3.5, alpha = 0.4,show.legend = F, seed = color.seed, show.axes = F)
+
+
+
+# Annotate the plots with cluster genes discovered by Seurat
+# Cluster 0 markers from Seurat
+genes.embed <- c("Aqp1", "Hspa1a", "Jun", "Junb",
+                 "Cdkn1a", "Egr1", "Aplnr", "Sox4", "Timp4")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Cluster 1 markers from Seurat
+genes.embed <- c("Aqp1", "Fabp4", "Gpihbp1", "Rgcc",
+                 "C1qtnf9", "Car4", "Slc28a2", "Trp53i11", "Timp4")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Cluster 2 markers from Seurat
+genes.embed <- c("Cxcl12", "Aqp7", "Mgll", "Rbp7",
+                 "Btnl9", "Slc26a10", "Slc6a6", "Gja1", "Car4")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Cluster 3 markers from Seurat
+genes.embed <- c("Fbln5", "Stmn2", "Glul", "Alpl",
+                 "Rbp7", "Alox12", "Hey1", "Nebl", "Vegfc")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Cluster 4 markers from Seurat
+genes.embed <- c("Ifit1","Ifit3","Isg15",'Ifit2','Rsad2','Rtp4','Irf7','Usp18','Stat1')
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Cluster 5 markers from Seurat
+genes.embed <- c("Cfh","Dcn","Mgp",'Cpe','Apoe','Cytl1','Rbp1','Bgn','Pam','H19')
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Cluster 6 markers from Seurat
+genes.embed <- c("Ift122","Fscn1","Mycn",'Tubb5','Hmgb2','Tmsb10','H2afz','Sparc','Mest')
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Cluster 7 markers from Seurat
+genes.embed <- c("Prss23","Calcrl","Vwf",'Cd9','Vcam1','Fmo2','Eln','Tgm2','Emp3')
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Cluster 8 markers from Seurat
+genes.embed <- c("Mmrn1","Ccl21a","Pard6g",'Fgl2','Lcn2','Reln','Lyve1','Prss23','Lrg1')
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Cluster 9 markers from Seurat
+genes.embed <- c("Rgs5","Acta2","Tpm2",'Myl9','Tagln','Myh11','Ndufa4l2','Gsn','Errfi1')
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Cluster 10 markers from Seurat
+genes.embed <- c("Cd74","Rac2","Cd52",'H2-Ab1','Cd79a','H2-Aa','H2-Eb1','Cd79b','Ly6d')
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+
+# We can also interpret the factors by using the gene loadings matrix. Here, we extract the top 3 genes for each factor by gene loading. Since NMF tends to create a parts-based representation of the data, the factors often correspond to key biological processes or gene modules that explain the data
+gene.loadings <- nmf.res$W
+top.factor.genes.df <- SummarizeAssocFeatures(gene.loadings, features.return = 3)
+write.csv(top.factor.genes.df,'topfactors.csv')
+head(top.factor.genes.df)
+
+# Use top 3 genes from swne to annotate clusters
+# Factor 1
+genes.embed <- c("Cxcl12","Slc6a6","Slc26a10")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 2
+genes.embed <- c("Pam","Clu","Bgn")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 3
+genes.embed <- c("Stmn2","Rbp7","Fbln5")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 4
+genes.embed <- c("Aqp1","Aplnr","B2m")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 5
+genes.embed <- c("Apoe","Mgp","Cfh")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 6
+genes.embed <- c("Junb","Jun","Fos")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 7
+genes.embed <- c("Cd74","H2-Ab1","H2-Aa")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 8
+genes.embed <- c("Actb","Lrrc8a","Dusp3")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 9
+genes.embed <- c("Gpihbp1","Cd36","mt-Nd1")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 10
+genes.embed <- c("Rgs5","Acta2","Tpm2")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 11
+genes.embed <- c("Isg15","Ifit1","Ifit3")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+# Factor 11
+genes.embed <- c("Mmrn1","Ccl21a","Fgl2")
+swne.embedding <- EmbedFeatures(swne.embedding, nmf.res$W, genes.embed, n_pull = 4)
+PlotSWNE(swne.embedding, alpha.plot = 0.4, sample.groups = cell.clusters, do.label = T, label.size = 3.5, pt.size = 1.25, show.legend = F, seed = color.seed)
+
+# Visualize gene expression on the swne plot
+# Rerun the embedding to get a new plot
+swne.embedding <- EmbedSWNE(nmf.scores, snn, alpha.exp = alpha.exp, snn.exp = snn.exp,n_pull = n_pull, dist.use = "IC")
+# Remove the facotr loadings
+swne.embedding$H.coords$name <- ""
+# Declare the gene of interest as a variable
+gene.use <- "Plvap"
+# Get that gene measurement from the expression matrix
+gene.expr <- norm.counts[gene.use,]
+# Render the gene expression on the swne plot
+FeaturePlotSWNE(swne.embedding, gene.expr, gene.use, alpha.plot = 0.4, label.size = 3.5, pt.size = 1.25)
+
+
+# And finally, we can make a heatmap to visualize the top factors for each gene
+gene.loadings.heat <- gene.loadings[unique(top.factor.genes.df$feature),]
+ggHeat(gene.loadings.heat, clustering = "col")
+
+# He just added this functionality. So maybe we need to reinstall the package for update
+color.mapping <- ExtractSWNEColors(swne.embedding, sample.groups = cell.clusters, seed = color.seed)
+color.mapping
+TSNEPlot(se.obj9, colors.use = color.mapping)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

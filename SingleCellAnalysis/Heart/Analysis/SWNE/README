@@ -1,0 +1,19 @@
+# Data used for this swne analysis was the combined data of the young and old cardiac endothelial cells
+
+CellAnnotation.csv : Contains the annotation of each cells (either young or aged)
+Combined.csv : Gene expression of matrix of all the cardiac endothelial cells
+Swne.Rmd: Code for the analysis
+
+Results folder:
+    # AnnotateSwneWithClusterMarkersFromSeurat : Contains swne clustering annotated by marker genes discovered by seurat
+    # AnnotateSwnewithTop3SwneGenes : Contains swne clustering annotated by marker genes discovered by swne
+    # HeatMapFactors : Grouping of the factors that drives the separation as discovered by swne
+    # Model Selection : Deriving the optimal k to be used for clustering
+    # plvap_swne : Annotating the swne cluster with plvap gene expression
+    # swne_clusters : swne clustering 
+    # swne_clusters_factors : swne clustering with factors embedded
+    # swne_YoungPink_OldBlue : swne clustering with age status
+    # topfactors.csv : top cluster specific genes identified by swne
+    # tsne_Age : Plotting of tsne by age for comparison to swne
+    # tsne_cluster : Plotting of tsne by cluster for comparison with swne
+    # Projecting swne embeddings onto tsne visualization
