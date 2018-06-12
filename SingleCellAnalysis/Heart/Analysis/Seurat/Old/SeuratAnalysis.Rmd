@@ -1,0 +1,200 @@
+---
+title: "Clustering of old cardiac endothelial cells"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# I have merged the gene matrices of young and aged brain endothelial cells
+# Load the libraries and the data
+```{r cars}
+library(Seurat)
+library(cowplot)
+setwd("/Volumes/Uchenna_MacDesk/UchennaDesktop/Desktop/BarnesLab/SingleCellRNASeq/YoungCardiacOldCardiacEndothelialCells/Project_CEL171114AB_Data/Old/filtered_gene_bc_matrices/mm10")
+# read in the expression matrix
+Old = read.csv("OldCardiacEndothelialCells.csv",row.names=1)
+# Sanity check
+Old[1:3,1:3]
+# The csv files contains Cells as columns and Genes (features) in rows
+# Size of data set is 1183 Cells and 27998 Genes
+dim(Old)
+# Lets save the cell names of this dataset to be used to create the annotation file
+Names = colnames(Old)
+# Create Annotation file with the Names of the cells
+AnnotationFile = data.frame(Names)
+# Add a new column called CellType thatr just describes the cells as Young
+AnnotationFile$CellType = 'Old'
+# Make the cell names as row names too instead of sequential indexes
+rownames(AnnotationFile)=AnnotationFile$Names
+# Convert the column names of column 1 to CellNames
+colnames(AnnotationFile)[1] = 'CellNames'
+library(dplyr)
+# First make the expression data as a sparse data frame to speed up computation. 
+# Our combined data is not numeric, so convert the data frame to numeric
+Old1 = data.matrix(Old)
+# Then convert to a sparse matrix
+expression.data <- Matrix(Old1, sparse = T)
+# Sanity check
+expression.data[1:3,1:3]
+```
+
+# http://satijalab.org/seurat/interaction_vignette.html
+
+# Seurat Analysis
+```{r}
+New <- CreateSeuratObject(raw.data = expression.data, min.cells = 3, min.genes = 200, 
+    project = "10X_old")
+
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = New@data), value = TRUE)
+percent.mito <- Matrix::colSums(New@raw.data[mito.genes, ])/Matrix::colSums(New@raw.data)
+# Add percent.mito to the metadata
+New <- AddMetaData(object = New, metadata = percent.mito, col.name = "percent.mito")
+# Also add the cell annotation as part of the metadata
+New1 = AddMetaData(object=New,metadata = AnnotationFile)
+# This threw up a warning. Understand that warning. The plot is also kinda different from the plot from the tutorial;
+# The warning is that all cells have the same value of feature
+VlnPlot(object = New1, features.plot = c("nGene", "nUMI", "percent.mito"), nCol = 3)
+
+# We filter out cells that have unique gene counts over 2,500 or less than
+# 200 Note that low.thresholds and high.thresholds are used to define a
+# 'gate' -Inf and Inf should be used if you don't want a lower or upper
+# threshold.
+New <- FilterCells(object = New1, subset.names = c("nGene", "percent.mito"), 
+    low.thresholds = c(200, -Inf), high.thresholds = c(2500, 0.05))
+
+# Normalizing the data
+# After removing unwanted cells from the dataset, the next step is to normalize the data. By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the gene expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result.
+
+New <- NormalizeData(object = New, normalization.method = "LogNormalize", 
+    scale.factor = 10000)
+
+# Detection of variable genes across the single cells
+# Seurat calculates highly variable genes and focuses on these for downstream analysis. FindVariableGenes calculates the average expression and dispersion for each gene, places these genes into bins, and then calculates a z-score for dispersion within each bin. This helps control for the relationship between variability and average expression. This function is unchanged from (Macosko et al.), but new methods for variable gene expression identification are coming soon. We suggest that users set these parameters to mark visual outliers on the dispersion plot, but the exact parameter settings may vary based on the data type, heterogeneity in the sample, and normalization strategy. The parameters here identify ~2,000 variable genes, and represent typical parameter settings for UMI data that is normalized to a total of 1e4 molecules.
+
+New <- FindVariableGenes(object = New, mean.function = ExpMean, dispersion.function = LogVMR, 
+    x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
+
+# Found 2353 variable genes
+length(x = New@var.genes)
+
+#Scaling the data and removing unwanted sources of variation
+#Your single cell dataset likely contains ‘uninteresting’ sources of variation. This could include not only technical noise, but batch effects, or even biological sources of variation (cell cycle stage). As suggested in Buettner et al, NBT, 2015, regressing these signals out of the analysis can improve downstream dimensionality reduction and clustering. To mitigate the effect of these signals, Seurat constructs linear models to predict gene expression based on user-defined variables. The scaled z-scored residuals of these models are stored in the scale.data slot, and are used for dimensionality reduction and clustering.
+
+#We can regress out cell-cell variation in gene expression driven by batch (if applicable), cell alignment rate (as provided by Drop-seq tools for Drop-seq data), the number of detected molecules, and mitochondrial gene expression. For cycling cells, we can also learn a ‘cell-cycle’ score (see example [HERE]) and regress this out as well. In this simple example here for post-mitotic blood cells, we regress on the number of detected molecules per cell as well as the percentage mitochondrial gene content.
+
+# Seurat v2.0 implements this regression as part of the data scaling process. Therefore, the RegressOut function has been deprecated, and replaced with the vars.to.regress argument in ScaleData.
+New <- ScaleData(object = New, vars.to.regress = c("nUMI", "percent.mito"))
+# Perform a linear dimension reduction on the scaled data
+New <- RunPCA(object = New, pc.genes = New@var.genes, do.print = TRUE, pcs.print = 1:5, 
+    genes.print = 5)
+
+#Examine and visualize PCA results a few different ways
+PrintPCA(object = New, pcs.print = 1:5, genes.print = 5, use.full = FALSE)
+VizPCA(object = New, pcs.use = 1:2)
+PCAPlot(object = New, dim.1 = 1, dim.2 = 2)
+PCHeatmap(object = New, pc.use = 1:12, cells.use = 500, do.balanced = TRUE, label.columns = FALSE, use.full = FALSE)
+PCElbowPlot(object = New)
+
+# Using the dimensions 1 to 10 to discover clusters with a resolution of 0.6. 
+# Increasing this resolution up to 1.2 will increase the number of clusters discovered
+# So this might be something I should explore later.
+New <- FindClusters(object = New, reduction.type = "pca", dims.use = 1:10, 
+    resolution = 0.6, print.output = 0, save.SNN = TRUE)
+# Now run the Tsne
+New <- RunTSNE(object = New, dims.use = 1:10, do.fast = TRUE)
+# Plot the Tsne
+TSNEPlot(object = New,do.label=TRUE)
+
+# find all markers of cluster 0
+cluster0.markers <- FindMarkers(object = New, ident.1 = 0, min.pct = 0.25)
+print(x = head(x = cluster0.markers, n = 10))
+# find all markers of cluster 1
+cluster1.markers <- FindMarkers(object = New, ident.1 = 1, min.pct = 0.25)
+print(x = head(x = cluster1.markers, n = 10))
+# find all markers of cluster 2
+cluster2.markers <- FindMarkers(object = New, ident.1 = 2, min.pct = 0.25)
+print(x = head(x = cluster2.markers, n = 10))
+# find all markers of cluster 3
+cluster3.markers <- FindMarkers(object = New, ident.1 = 3, min.pct = 0.25)
+print(x = head(x = cluster3.markers, n = 10))
+cluster4.markers <- FindMarkers(object = New, ident.1 = 4, min.pct = 0.25)
+print(x = head(x = cluster4.markers, n = 10))
+cluster5.markers <- FindMarkers(object = New, ident.1 = 5, min.pct = 0.25)
+print(x = head(x = cluster5.markers, n = 10))
+cluster6.markers <- FindMarkers(object = New, ident.1 = 6, min.pct = 0.25)
+print(x = head(x = cluster6.markers, n = 10))
+cluster7.markers <- FindMarkers(object = New, ident.1 = 7, min.pct = 0.25)
+print(x = head(x = cluster7.markers, n = 10))
+cluster8.markers <- FindMarkers(object = New, ident.1 = 8, min.pct = 0.25)
+print(x = head(x = cluster8.markers, n = 10))
+cluster9.markers <- FindMarkers(object = New, ident.1 = 9, min.pct = 0.25)
+print(x = head(x = cluster9.markers, n = 10))
+cluster10.markers <- FindMarkers(object = New, ident.1 = 10, min.pct = 0.25)
+print(x = head(x = cluster10.markers, n = 10))
+
+# find markers for every cluster compared to all remaining cells, report
+# only the positive ones
+New.markers <- FindAllMarkers(object = New, only.pos = TRUE, min.pct = 0.25, 
+    thresh.use = 0.25)
+New.markers %>% group_by(cluster) %>% top_n(10, avg_logFC)
+
+# find markers for every cluster compared to all remaining cells, report
+# only the positive ones
+New.markers <- FindAllMarkers(object = New, only.pos = TRUE, min.pct = 0.25, 
+    thresh.use = 0.25)
+New.markers %>% group_by(cluster) %>% top_n(2, avg_logFC)
+
+# Top markers plots
+# Cluster 0
+FeaturePlot(object = New, features.plot = c("Fabp4","Aqp1","Gpihbp1","Timp4","Aplnr","C1qtnf9"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 1
+FeaturePlot(object = New, features.plot = c("Cxcl12","Rbp7","Aqp7","Mgll","Cd300lg","Btnl9"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 2
+FeaturePlot(object = New, features.plot = c("Junb","Aqp1","Jun","Egr1","Hspa1a","Cdkn1a"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 3
+FeaturePlot(object = New, features.plot = c("Fbln5","Stmn2","Glul","Vegfc","Rbp7"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 4
+FeaturePlot(object = New, features.plot = c("Fscn1","Tmsb10","Trp53i11","Ift122","Mycn","Nrp2"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 5
+FeaturePlot(object = New, features.plot = c("Apoe","Cfh","Mgp","Npr3","Dcn","Cpe"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 6
+FeaturePlot(object = New, features.plot = c("Eln","Calcrl","Prss23","Vwf","Cd9","Vcam1"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 7
+FeaturePlot(object = New, features.plot = c("Isg15","Ifit3","Ifit1","Rsad2","Ifit2","Usp18"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 8
+FeaturePlot(object = New, features.plot = c("Rgs5","Acta2","Tpm2","Myl9","Tagln","Ndufa4l2"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 9
+FeaturePlot(object = New, features.plot = c("Ccl21a","Mmrn1","Pard6g","Fgl2","Lcn2","Reln"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 10
+FeaturePlot(object = New, features.plot = c("Hmgb2","Stmn1","Top2a","H2afz","Ube2c","Ccnb2"), cols.use = c("grey", "blue"),reduction.use = "tsne")
+
+
+# Violin Plots for cluster markers
+VlnPlot(object = New, features.plot = c("Fabp4","Aqp1","Gpihbp1","Timp4","Aplnr","C1qtnf9"))
+VlnPlot(object = New, features.plot = c("Cxcl12","Rbp7","Aqp7","Mgll","Cd300lg","Btnl9"))
+VlnPlot(object = New, features.plot = c("Junb","Aqp1","Jun","Egr1","Hspa1a","Cdkn1a"))
+VlnPlot(object = New, features.plot = c("Fbln5","Stmn2","Glul","Vegfc","Rbp7"))
+VlnPlot(object = New, features.plot = c("Fscn1","Tmsb10","Trp53i11","Ift122","Mycn","Nrp2"))
+VlnPlot(object = New, features.plot = c("Apoe","Cfh","Mgp","Npr3","Dcn","Cpe"))
+VlnPlot(object = New, features.plot = c("Eln","Calcrl","Prss23","Vwf","Cd9","Vcam1"))
+VlnPlot(object = New, features.plot = c("Isg15","Ifit3","Ifit1","Rsad2","Ifit2","Usp18"))
+VlnPlot(object = New, features.plot = c("Rgs5","Acta2","Tpm2","Myl9","Tagln","Ndufa4l2"))
+VlnPlot(object = New, features.plot = c("Ccl21a","Mmrn1","Pard6g","Fgl2","Lcn2","Reln"))
+VlnPlot(object = New,features.plot = c("Hmgb2", "Stmn1", "Top2a", "H2afz", "Ube2c", "Ccnb2"))
+
+
+# Plot heatmap with the top 10 genes for each cluster
+top10 <- New.markers %>% group_by(cluster) %>% top_n(10, avg_logFC)
+# setting slim.col.label to TRUE will print just the cluster IDS instead of
+# every cell name
+DoHeatmap(object = New, genes.use = top10$gene, slim.col.label = TRUE, remove.key = TRUE)
+
+```
+
+
+
+
+
+

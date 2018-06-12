@@ -1,0 +1,57 @@
+---
+title: "CombinedData"
+output: html_document
+---
+# Merging Young and Aged Cardiac dataset
+```{r}
+setwd("~/Desktop/Combined_Cardiac")
+
+
+Young = read.csv("YoungCardiacEndothelialCells.csv", row.names = 1)
+Old = read.csv("OldCardiacEndothelialCells.csv", row.names = 1)
+
+# Add a new column to annotate the Young as Young and the Old as Old
+# Transpose the data
+Young_t = as.data.frame(t(Young))
+# Now annotate
+Young_t$CellType= 'Young'
+# Sanity check
+Young_t[1:3,27998:27999]
+# Do same for Old
+Old_t = as.data.frame(t(Old))
+Old_t$CellType= 'Old'
+Old_t[1:3,27998:27999]
+# Combine the two data frame
+Combined = rbind(Young_t,Old_t)
+# Sanity check
+dim(Combined)
+Combined[3165:3170,27998:27999]
+
+# Save the CellType as annotation
+Annotation =as.data.frame(Combined[,27999])
+colnames(Annotation) = 'CellType'
+# Now drop the CellType column in the combined data
+library(dplyr)
+Combined1 = Combined %>% select(-CellType)
+# Sanity check
+dim(Combined1)
+# Now lets transpose the data back
+Combined_t = as.data.frame(t(Combined1))
+# Sanity check
+Combined_t[1:3,4344:4348]
+# Save the file
+write.csv(Combined_t,'Combined.csv')
+write.csv(Annotation,'CellAnnotation.csv')
+
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

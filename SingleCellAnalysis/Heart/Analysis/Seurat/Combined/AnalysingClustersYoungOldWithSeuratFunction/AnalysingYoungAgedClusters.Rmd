@@ -1,0 +1,154 @@
+---
+title: "Identifying the differences between young and aged for each endothelial cell subtype  "
+output: html_document
+---
+# I have merged the gene matrices of young and aged brain endothelial cells
+# Load the libraries and the data
+# https://yanwu2014.github.io/swne/Examples/pbmc3k_swne_seurat.html
+```{r}
+setwd("/Users/emechebe/Desktop/Plvap_Differentials")
+library(Seurat)
+library(cowplot)
+library(swne)
+
+# read in the expression matrix
+Combined = read.csv("Combined.csv",row.names=1)
+# Sanity check
+dim(Combined)
+Combined[1:3,1:3]
+# The csv files contains Cells as columns and Genes (features) in rows
+# Size of data set is 4348 Cells and 27998 Genes
+# Lets save the cell names of this dataset to be used to create the annotation file
+Names = colnames(Combined)
+# This has genes as rows (~27k) and cells as columns (4348)
+# I created an annotation that has 1 column, CellType and 4348 rows. Each row matches each column in the
+# Combined data and describes each of these cells as either Young nor Old
+# Read in the annotation file
+AnnotationFile = read.csv('CellAnnotation.csv',row.names=1)
+# Sanity check
+dim(AnnotationFile)
+head(AnnotationFile)
+tail(AnnotationFile)
+# The annotation file has rownames as sequential indexes. 
+# Reformat the annotation file to have the cell names from the combined as rownames
+# Add the Names from Combined data as another column in the annotation file
+AnnotationFile1 = cbind(AnnotationFile,'CellNames'= Names)
+# Sanity check
+head(AnnotationFile1)
+# Now make this CellNames column as the row names
+rownames(AnnotationFile1) = AnnotationFile1$CellNames
+# Sanity check
+head(AnnotationFile1)
+# Now drop the redundant CellNames column
+library(dplyr)
+AnnotationFile2 = AnnotationFile1 %>% select(-CellNames)
+# Sanity check
+head(AnnotationFile2)
+```
+
+# Create a Seurat object
+```{r}
+# First make the expression data as a sparse data frame to speed up computation. 
+# Our combined data is not numeric, so convert the data frame to numeric
+Combined1 = data.matrix(Combined)
+# Then convert to a sparse matrix
+expression.data <- Matrix(Combined1, sparse = T)
+# Sanity check
+expression.data[1:3,1:3]
+
+
+# Generating Seurat Object
+se.obj <- CreateSeuratObject(raw.data = expression.data, min.cells = 3, min.genes = 200, 
+    project = "10X_old")
+
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = se.obj@data), value = TRUE)
+
+percent.mito <- Matrix::colSums(se.obj@raw.data[mito.genes, ])/Matrix::colSums(se.obj@raw.data)
+# Add percent.mito to the metadata
+se.obj1 <- AddMetaData(object = se.obj, metadata = percent.mito, col.name = "percent.mito")
+# Also add the cell annotation as part of the metadata
+se.obj2 = AddMetaData(object=se.obj1,metadata = AnnotationFile2)
+# This threw up a warning. Understand that warning. The plot is also kinda different from the plot from the tutorial;
+# The warning is that all cells have the same value of feature
+VlnPlot(object = se.obj2, features.plot = c("nGene", "nUMI", "percent.mito"), nCol = 3)
+
+# We filter out cells that have unique gene counts over 2,500 or less than
+# 200 Note that low.thresholds and high.thresholds are used to define a
+# 'gate' -Inf and Inf should be used if you don't want a lower or upper
+# threshold.
+se.obj3 <- FilterCells(object = se.obj2, subset.names = c("nGene", "percent.mito"), 
+    low.thresholds = c(200, -Inf), high.thresholds = c(2500, 0.05))
+# Normalizing the data
+se.obj4 <- NormalizeData(object = se.obj3, normalization.method = "LogNormalize", 
+    scale.factor = 10000)
+# Detection of variable genes across the single cells
+se.obj5 <- FindVariableGenes(object = se.obj4, mean.function = ExpMean, dispersion.function = LogVMR, 
+    x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
+# Found 1526 variable genes
+length(x = se.obj5@var.genes)
+#Scaling the data and removing unwanted sources of variation
+se.obj6 <- ScaleData(object = se.obj5, vars.to.regress = c("nUMI", "percent.mito"))
+# Perform a linear dimension reduction on the scaled data
+se.obj7 <- RunPCA(object = se.obj6, pc.genes = se.obj6@var.genes, do.print = TRUE, pcs.print = 1:5, 
+    genes.print = 5)
+# Using the dimensions 1 to 10 to discover clusters with a resolution of 0.6. 
+# Increasing this resolution up to 1.2 will increase the number of clusters discovered
+# So this might be something I should explore later.
+se.obj8 <- FindClusters(object = se.obj7, reduction.type = "pca", dims.use = 1:10, 
+    resolution = 0.6, print.output = 0, save.SNN = TRUE)
+
+# Now run the Tsne
+se.obj9 <- RunTSNE(object = se.obj8, dims.use = 1:10, do.fast = TRUE)
+
+# Plot the Tsne
+TSNEPlot(object = se.obj9,do.label=TRUE)
+# Lets switch the id to CellType so we can cluster by young or old
+se.obj10 <- SetAllIdent(object = se.obj9, id = "CellType")
+# Plot
+TSNEPlot(object = se.obj10)
+
+# Add a new column to the metadata which will group cells by age_cluster
+se.obj9@meta.data$Cluster_Age =paste(se.obj9@meta.data$CellType,se.obj9@meta.data$res.0.6,sep='_')
+# Now switch the id to that column (Cluster_Age)
+se.obj11 <- SetAllIdent(object = se.obj9, id = "Cluster_Age")
+# Plot the data with the new groupings of Cluster and Age
+TSNEPlot(object = se.obj11)
+# list options for groups to perform differential expression on
+levels(se.obj11@ident)
+# Find differentially expressed genes between Young_1 and Old_1
+de_genes0 <- FindMarkers(se.obj11, ident.1 = "Young_0", ident.2 = "Old_0")
+write.csv(de_genes0,'DifferentiallyExpressedGenes_Cluster0.csv')
+de_genes1 <- FindMarkers(se.obj11, ident.1 = "Young_1", ident.2 = "Old_1")
+write.csv(de_genes1,'DifferentiallyExpressedGenes_Cluster1.csv')
+de_genes2 <- FindMarkers(se.obj11, ident.1 = "Young_2", ident.2 = "Old_2")
+write.csv(de_genes2,'DifferentiallyExpressedGenes_Cluster2.csv')
+de_genes3 <- FindMarkers(se.obj11, ident.1 = "Young_3", ident.2 = "Old_3")
+write.csv(de_genes3,'DifferentiallyExpressedGenes_Cluster3.csv')
+de_genes4 <- FindMarkers(se.obj11, ident.1 = "Young_4", ident.2 = "Old_4")
+write.csv(de_genes4,'DifferentiallyExpressedGenes_Cluster4.csv')
+de_genes5 <- FindMarkers(se.obj11, ident.1 = "Young_5", ident.2 = "Old_5")
+write.csv(de_genes5,'DifferentiallyExpressedGenes_Cluster5.csv')
+de_genes6 <- FindMarkers(se.obj11, ident.1 = "Young_6", ident.2 = "Old_6")
+write.csv(de_genes6,'DifferentiallyExpressedGenes_Cluster6.csv')
+de_genes7 <- FindMarkers(se.obj11, ident.1 = "Young_7", ident.2 = "Old_7")
+write.csv(de_genes7,'DifferentiallyExpressedGenes_Cluster7.csv')
+de_genes8 <- FindMarkers(se.obj11, ident.1 = "Young_8", ident.2 = "Old_8")
+write.csv(de_genes8,'DifferentiallyExpressedGenes_Cluster8.csv')
+de_genes9 <- FindMarkers(se.obj11, ident.1 = "Young_9", ident.2 = "Old_9")
+write.csv(de_genes9,'DifferentiallyExpressedGenes_Cluster9.csv')
+de_genes10 <- FindMarkers(se.obj11, ident.1 = "Young_10", ident.2 = "Old_10")
+write.csv(de_genes10,'DifferentiallyExpressedGenes_Cluster10.csv')
+
+
+
+# Find differentially expressed genes between Young_5 and Old_5
+de_genes <- FindMarkers(se.obj11, ident.1 = "Young_5", ident.2 = "Old_5")
+# view results
+head(de_genes)
+write.csv(de_genes,'DifferentiallyExpressedGenes_Plvap.csv')
+```
+
+
+
+
+

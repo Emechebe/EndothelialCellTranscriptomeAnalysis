@@ -1,0 +1,16 @@
+# Identifying gene expression differences between Young cluster 5 and Aged cluster 5 using Seurat FindMarkers function
+
+# R file is called Cluster5FindMarkers.Rmd
+
+# To do that, I added 2 extra columns called Cluster_Age or Age_Cluster. Each column annotates each cell by cluster and age. I also ran a tsne using the Cluster_Age column as annotation.
+# It is called tsne_clusters_by_age
+
+So I can set  findmarkers to Young_5 and Old_5 to perform DE and find gene differences between the two.
+
+ # Result saved as Cluster5AgeDifferences.csv
+# Result table annotation
+# p_val : Unadjusted p_values
+# avg_logFC : log fold change. Positive values are genes that are more in the first cluster passed
+# pct.1 : The percentage of cells where the gene is detected in the first group
+# pct.2 : The percentage of cells where the gene is detected in the first group
+# p_val_adj : Bonferroni adjusted p values

@@ -1,0 +1,100 @@
+---
+title: "Cluster5_Plvap"
+author: "Uchenna Emechebe"
+date: "3/12/2018"
+output: html_document
+---
+
+```{r}
+# Our initial analysis show an interesting cluster 5 group that also seem to have an age component
+# We have speculated that this cluster could be fenestrated endothelial cells as they are enriched
+# for Plvap. It is an interesting prospect that this endothelial subtype is more affected by age
+# than other clusters
+# So the idea here was to subset this cluster (both the young and Old) and rerun the analysis
+# The subsetted data for the cluster is called Group5Rawdata.csv (See Combined
+# Seurat1 for the subsetting of this)
+
+# First make the expression data as a sparse data frame to speed up computation. 
+# Our combined data is not numeric, so convert the data frame to numeric
+Cluster5_normalized_data= read.csv("Group5Rawdata.csv",row.names=1)
+# Convert data frame to a matrix
+Cluster5_Matrix = data.matrix(Cluster5_normalized_data)
+# Then convert to a sparse matrix
+expression.data <- Matrix(Cluster5_Matrix, sparse = T)
+# Sanity check
+expression.data[1:3,1:3]
+Group5.object <- CreateSeuratObject(raw.data = expression.data, min.cells = 3, min.genes = 200, 
+    project = "10X_old")
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = Group5.object@data), value = TRUE)
+percent.mito <- Matrix::colSums(Group5.object@raw.data[mito.genes, ])/Matrix::colSums(Group5.object@raw.data)
+
+# Add percent.mito to the metadata
+Group5.object1 <- AddMetaData(object = Group5.object, metadata = percent.mito, col.name = "percent.mito")
+# Also add the cell annotation as part of the metadata
+# Read in the annotation file
+AnnotationFile = read.csv('GroupAnnotation5_clusters.csv',row.names=1)
+# Sanity check
+dim(AnnotationFile)
+head(AnnotationFile)
+tail(AnnotationFile)
+Group5.object2 = AddMetaData(object=Group5.object1,metadata = AnnotationFile)
+# We filter out cells that have unique gene counts over 2,500 or less than
+# 200 Note that low.thresholds and high.thresholds are used to define a
+# 'gate' -Inf and Inf should be used if you don't want a lower or upper
+# threshold.
+Group5.object3 <- FilterCells(object = Group5.object2, subset.names = c("nGene", "percent.mito"), 
+    low.thresholds = c(200, -Inf), high.thresholds = c(2500, 0.05))
+# Normalizing the data
+# After removing unwanted cells from the dataset, the next step is to normalize the data. By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the gene expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result.
+Group5.object4 <- NormalizeData(object = Group5.object3, normalization.method = "LogNormalize", 
+    scale.factor = 10000)
+# Detect variable genes
+Group5.object5 <- FindVariableGenes(object = Group5.object4, mean.function = ExpMean, dispersion.function = LogVMR, 
+    x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
+
+# Found 3106 variable genes
+length(x = Group5.object5@var.genes)
+
+# Seurat v2.0 implements this regression as part of the data scaling process. Therefore, the RegressOut function has been deprecated, and replaced with the vars.to.regress argument in ScaleData.
+Group5.object6 <- ScaleData(object = Group5.object5, vars.to.regress = c("nUMI", "percent.mito"))
+# Perform a linear dimension reduction on the scaled data
+Group5.object7 <- RunPCA(object = Group5.object6, pc.genes = Group5.object6@var.genes, do.print = TRUE, pcs.print = 1:5, 
+    genes.print = 5)
+
+#Examine and visualize PCA results a few different ways
+PrintPCA(object = Group5.object7 , pcs.print = 1:5, genes.print = 5, use.full = FALSE)
+VizPCA(object = Group5.object7 , pcs.use = 1:2)
+PCAPlot(object = Group5.object7 , dim.1 = 1, dim.2 = 2)
+PCHeatmap(object = Group5.object7 , pc.use = 1:12, cells.use = 500, do.balanced = TRUE, label.columns = FALSE, use.full = FALSE)
+PCElbowPlot(object = Group5.object7 )
+
+# Using the dimensions 1 to 10 to discover clusters with a resolution of 0.6. 
+# Increasing this resolution up to 1.2 will increase the number of clusters discovered
+# So this might be something I should explore later.
+Group5.object8 <- FindClusters(object = Group5.object7, reduction.type = "pca", dims.use = 1:10, 
+    resolution = 0.6, print.output = 0, save.SNN = TRUE)
+# Now run the Tsne
+Group5.object9 <- RunTSNE(object = Group5.object8, dims.use = 1:10, do.fast = TRUE)
+# Plot the Tsne
+TSNEPlot(object = Group5.object9,do.label=TRUE)
+
+# Lets switch the id to CellType so we can cluster by young or old
+expressionTsne_2 <- SetAllIdent(object = Group5.object9, id = "CellType")
+# Plot
+TSNEPlot(object = expressionTsne_2)
+
+# saved both results as Group5_reclustering and Group5_reclustering_Young_Old
+
+# There seem to be no identifiable clustering due to age or any other discernible variable. 
+# Maybe next step is to do a differential gene analysis between young group 5 and old group 5
+# My plan is to randomly divide the young cells into 5 groups and also old cells into 5 groups
+# Then perform differential gene analysis
+
+# After meeting with Andrew, he suggested I should look at Seurat to 
+# see if I can get gene differences within cluster 5.
+
+```
+
+
+
+

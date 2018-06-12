@@ -1,0 +1,157 @@
+---
+title: "Using FindMarker of Seurat to identify gene differences between Young and Aged Cluster 5 cells"
+output: html_document
+---
+
+```{r cars}
+# setwd("/Volumes/Uchenna_MacDesk/UchennaDesktop/Desktop/BarnesLab/SingleCellRNASeq/YoungCardiacOldCardiacEndothelialCells/Project_CEL171114AB_Data/Combined_Cardiac")
+
+library(Seurat)
+library(cowplot)
+# read in the expression matrix
+Combined = read.csv("Combined.csv",row.names=1)
+# Sanity check
+dim(Combined)
+Combined[1:3,1:3]
+# The csv files contains Cells as columns and Genes (features) in rows
+# Size of data set is 4348 Cells and 27998 Genes
+# Lets save the cell names of this dataset to be used to create the annotation file
+Names = colnames(Combined)
+# This has genes as rows (~27k) and cells as columns (4348)
+# I created an annotation that has 1 column, CellType and 4348 rows. Each row matches each column in the
+# Combined data and describes each of these cells as either Young nor Old
+# Read in the annotation file
+AnnotationFile = read.csv('CellAnnotation.csv',row.names=1)
+# Sanity check
+dim(AnnotationFile)
+head(AnnotationFile)
+tail(AnnotationFile)
+# The annotation file has rownames as sequential indexes. 
+# Reformat the annotation file to have the cell names from the combined as rownames
+# Add the Names from Combined data as another column in the annotation file
+AnnotationFile1 = cbind(AnnotationFile,'CellNames'= Names)
+# Sanity check
+head(AnnotationFile1)
+# Now make this CellNames column as the row names
+rownames(AnnotationFile1) = AnnotationFile1$CellNames
+# Sanity check
+head(AnnotationFile1)
+# Now drop the redundant CellNames column
+library(dplyr)
+AnnotationFile2 = AnnotationFile1 %>% select(-CellNames)
+# Sanity check
+head(AnnotationFile2)
+```
+
+# Create Seurat Object
+```{r}
+# First make the expression data as a sparse data frame to speed up computation. 
+# Our combined data is not numeric, so convert the data frame to numeric
+Combined1 = data.matrix(Combined)
+# Then convert to a sparse matrix
+expression.data <- Matrix(Combined1, sparse = T)
+# Sanity check
+expression.data[1:3,1:3]
+# Now create a seurat object.
+# Keep all genes expressed in >= 3 cells (~0.1% of the data). Note we can also keep all cells with at
+# least 200 detected genes by specifying min.genes = 200. Try this at some point to see how that changes the clustering
+New <- CreateSeuratObject(raw.data = expression.data, min.cells = 3, min.genes = 200, 
+    project = "10X_old")
+
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = New@data), value = TRUE)
+percent.mito <- Matrix::colSums(New@raw.data[mito.genes, ])/Matrix::colSums(New@raw.data)
+# Add percent.mito to the metadata
+New <- AddMetaData(object = New, metadata = percent.mito, col.name = "percent.mito")
+# Also add the cell annotation as part of the metadata
+New1 = AddMetaData(object=New,metadata = AnnotationFile2)
+# This threw up a warning. Understand that warning. The plot is also kinda different from the plot from the tutorial;
+# The warning is that all cells have the same value of feature
+VlnPlot(object = New1, features.plot = c("nGene", "nUMI", "percent.mito"), nCol = 3)
+
+# We filter out cells that have unique gene counts over 2,500 or less than
+# 200 Note that low.thresholds and high.thresholds are used to define a
+# 'gate' -Inf and Inf should be used if you don't want a lower or upper
+# threshold.
+New <- FilterCells(object = New1, subset.names = c("nGene", "percent.mito"), 
+    low.thresholds = c(200, -Inf), high.thresholds = c(2500, 0.05))
+
+# Normalizing the data
+# After removing unwanted cells from the dataset, the next step is to normalize the data. By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the gene expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result.
+
+New <- NormalizeData(object = New, normalization.method = "LogNormalize", 
+    scale.factor = 10000)
+
+# Detection of variable genes across the single cells
+# Seurat calculates highly variable genes and focuses on these for downstream analysis. FindVariableGenes calculates the average expression and dispersion for each gene, places these genes into bins, and then calculates a z-score for dispersion within each bin. This helps control for the relationship between variability and average expression. This function is unchanged from (Macosko et al.), but new methods for variable gene expression identification are coming soon. We suggest that users set these parameters to mark visual outliers on the dispersion plot, but the exact parameter settings may vary based on the data type, heterogeneity in the sample, and normalization strategy. The parameters here identify ~2,000 variable genes, and represent typical parameter settings for UMI data that is normalized to a total of 1e4 molecules.
+
+New <- FindVariableGenes(object = New, mean.function = ExpMean, dispersion.function = LogVMR, 
+    x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
+
+# Found 1526 variable genes
+length(x = New@var.genes)
+
+#Scaling the data and removing unwanted sources of variation
+#Your single cell dataset likely contains ‘uninteresting’ sources of variation. This could include not only technical noise, but batch effects, or even biological sources of variation (cell cycle stage). As suggested in Buettner et al, NBT, 2015, regressing these signals out of the analysis can improve downstream dimensionality reduction and clustering. To mitigate the effect of these signals, Seurat constructs linear models to predict gene expression based on user-defined variables. The scaled z-scored residuals of these models are stored in the scale.data slot, and are used for dimensionality reduction and clustering.
+
+#We can regress out cell-cell variation in gene expression driven by batch (if applicable), cell alignment rate (as provided by Drop-seq tools for Drop-seq data), the number of detected molecules, and mitochondrial gene expression. For cycling cells, we can also learn a ‘cell-cycle’ score (see example [HERE]) and regress this out as well. In this simple example here for post-mitotic blood cells, we regress on the number of detected molecules per cell as well as the percentage mitochondrial gene content.
+
+# Seurat v2.0 implements this regression as part of the data scaling process. Therefore, the RegressOut function has been deprecated, and replaced with the vars.to.regress argument in ScaleData.
+New <- ScaleData(object = New, vars.to.regress = c("nUMI", "percent.mito"))
+# Perform a linear dimension reduction on the scaled data
+New <- RunPCA(object = New, pc.genes = New@var.genes, do.print = TRUE, pcs.print = 1:5, 
+    genes.print = 5)
+
+#Examine and visualize PCA results a few different ways
+PrintPCA(object = New, pcs.print = 1:5, genes.print = 5, use.full = FALSE)
+VizPCA(object = New, pcs.use = 1:2)
+PCAPlot(object = New, dim.1 = 1, dim.2 = 2)
+PCHeatmap(object = New, pc.use = 1:12, cells.use = 500, do.balanced = TRUE, label.columns = FALSE, use.full = FALSE)
+PCElbowPlot(object = New)
+
+# Using the dimensions 1 to 10 to discover clusters with a resolution of 0.6. 
+# Increasing this resolution up to 1.2 will increase the number of clusters discovered
+# So this might be something I should explore later.
+New <- FindClusters(object = New, reduction.type = "pca", dims.use = 1:10, 
+    resolution = 0.6, print.output = 0, save.SNN = TRUE)
+# Now run the Tsne
+New <- RunTSNE(object = New, dims.use = 1:10, do.fast = TRUE)
+# Plot the Tsne
+TSNEPlot(object = New,do.label=TRUE)
+
+# Lets switch the id to CellType so we can cluster by young or old
+expressionTsne_2 <- SetAllIdent(object = New, id = "CellType")
+# Plot
+TSNEPlot(object = expressionTsne_2)
+
+# Add two new columns to the metadata which will group cells by age_cluster or cluster_age
+# So here all the clusters will be sub divided by age (eg Cluster 5 will be young_cluster5 and old_cluster5)
+New@meta.data$Cluster_Age = paste(New@meta.data$CellType,New@meta.data$res.0.6,sep='_')
+New@meta.data$Age_Cluster = paste(New@meta.data$res.0.6,New@meta.data$CellType,sep='_')
+# The default identity for seurat is set at clusters
+# This should show that we have clusters 0 to 10. So anytime we call a function from Seurat
+# the annotation is evaluated
+levels(New@ident)
+# Eg running a Tsne plot will return a plot annotated by clusters
+
+# We are interested in looking at the young and aged differences within each cluster; so we can
+# create another Seurat object where the identity is set to the Cluster_Age column in the metadata slot
+New_object <- SetAllIdent(object = New, id = "Cluster_Age")
+# Now look at the new identities
+levels(New_object@ident)
+# Pass this to a Tsne plot
+TSNEPlot(object = New_object)
+# As expected Tsne returns a plot in which each cluster is annotated by its age.
+
+# Now I can find the differences between young cluster 5 versus aged cluster 5
+Cluster5_AgeDifferences <- FindMarkers(New_object, ident.1 = "Young_5", ident.2 = "Old_5")
+# Result table annotation
+# p_val : Unadjusted p_values
+# avg_logFC : log fold change. Positive values are genes that are more in the first cluster passed
+# pct.1 : The percentage of cells where the gene is detected in the first group
+# pct.2 : The percentage of cells where the gene is detected in the first group
+# p_val_adj : Bonferroni adjusted p values
+
+write.csv(Cluster5_AgeDifferences, 'Cluster5AgeDifferences.csv')
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
