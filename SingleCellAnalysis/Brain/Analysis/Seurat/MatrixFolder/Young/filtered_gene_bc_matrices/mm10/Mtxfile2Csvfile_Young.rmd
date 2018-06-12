@@ -1,0 +1,76 @@
+---
+title: "Mtxfile2Csvfile"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(Matrix)
+
+# Load the file
+# Load the dataset
+New.data <- Read10X(data.dir =  "/Users/emechebe/Desktop/Young/filtered_gene_bc_matrices/mm10")
+
+# Lets save the file as a csv file so we can use other software to
+# analyse the single cell data
+Young = as.matrix(x=New.data)
+# Confirm the number of cells and genes
+dim(Young)
+# 27998 genes as rows and 647 cells as columns. The cells were
+# annotated with bar codes. But for this file, I want to replace the
+# bar codes with numbers.
+# First lets transpose the data to have the cells as rows
+Young_transposed = t(Young)
+# Sanity check
+dim(Young_transposed)
+Young_transposed[1:3,1:3]
+# Now add a new column with Cell numbering from 1 to 647
+Young_transposed = cbind(Young_transposed,'CellNames'=1:nrow(Young_transposed))
+# Sanity Check
+dim(Young_transposed)
+Young_transposed[1:3,27998:27999]
+# Convert matrix to dataframe
+Young_transposed_df = as.data.frame(Young_transposed)
+# Sanity Check
+dim(Young_transposed_df)
+# Attach the name Cell to all the numbers
+Young_transposed_df$CellNames <- paste("Cell",Young_transposed_df$CellNames, sep="_")
+# Set the CellName column as the row names
+rownames(Young_transposed_df)=Young_transposed_df$CellNames
+# Sanity check
+Young_transposed_df[1:3,1:3]
+# Drop the last column 
+Young_transposed_df$CellNames = NULL
+# Sanity check
+dim(Young_transposed_df)
+Young_transposed_df[1:3,1:3]
+Young_transposed_df[1:3,27997:27998]
+# Now lets retranspose the data so genes are rows and the cells are columns
+Young_df = t(Young_transposed_df)
+# Sanity Check
+dim(Young_df)
+Young_df[1:3,1:3]
+# Save as a csv file 
+write.csv(Young_df,'YoungBrainEndothelialCells.csv')
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

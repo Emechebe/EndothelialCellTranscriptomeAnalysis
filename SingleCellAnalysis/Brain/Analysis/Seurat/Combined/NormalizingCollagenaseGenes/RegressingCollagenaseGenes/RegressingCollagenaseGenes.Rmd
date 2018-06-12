@@ -1,0 +1,325 @@
+---
+title: "RemovingCollagenaseGenes"
+author: "Uchenna Emechebe"
+date: "1/5/2018"
+output: html_document
+---
+
+```{r}
+# Read in the combined expression data
+setwd("/Volumes/Uchenna_MacDesk/UchennaDesktop/Desktop/BarnesLab/SingleCellRNASeq/YoungBrainOldBrainEndothelialCells/Project_CEL171114AB_Data/Seurat/Combined/RegressingOutCollagenase")
+ExpressionData = read.csv("Combined.csv",row.names=1)
+# Make a second copy. I did this so that I can test my code on it and compare it with the original for sanity checks
+# This is not neccessarily at all!
+ExpressionData2 = read.csv("Combined.csv",row.names=1)
+# Sanity check
+ExpressionData[1:3,1:3]
+dim(ExpressionData)
+# Confirms we have genes as row names and cells as column names with 27998 genes and 1417 cells
+
+# Read in the annotation file
+Annotation = read.csv('CellAnnotation.csv',row.names=1)
+# sanity check
+head(Annotation)
+table(Annotation)
+dim(Annotation)
+# Confirms that Annotation has one column named CellType and this has 2 levels Old and Young
+# Old has 770 cells while Young has 647 cells (In total 1417)
+
+
+# Read in the collagenase genes
+CollagenaseGenes = read.csv('Upregulated_Collagenase_1hr.csv',row.names=1)
+head(CollagenaseGenes)
+# Shows that all the gene names have a suffix of __ with chr followed by a number or in the case of Xist followed by X
+# Used tidyverse to replace those trailing characters that comes after __
+library(tidyverse)
+CollagenaseGenes <- CollagenaseGenes %>% mutate(GeneName = GeneName %>% str_replace('__.+', ''))
+ListOfCollagenaseGenes = CollagenaseGenes$GeneName
+# Test how many of these Collagenase genes are in the expression data matrix 
+# Get the gene names of the expression data matrix as a list
+ListOfExpressionMatrixGenes = rownames(ExpressionData)
+# Are all the genes in the collagenase list in the matrix gene list
+all(ListOfCollagenaseGenes%in%ListOfExpressionMatrixGenes)
+# This returned False, so thus not all genes in the collagenase list are present in the expression matrix list
+# Get the genes in collagenase list present in the expression matrix
+Present = intersect(ListOfCollagenaseGenes,ListOfExpressionMatrixGenes)
+# Get the genes in collagenase absent in the expression matrix
+Absent = setdiff(ListOfCollagenaseGenes,ListOfExpressionMatrixGenes)
+# Turns out that the only discrepancy is the gene called Cebpd
+# Remove the Cebpd gene whose index is 11
+ListOfCollagenaseGenes1 = ListOfCollagenaseGenes[-11]
+
+# I will be using the AddModuleScore and it seems that the gene.list variable should be in a list of lists
+# Check the function out ?AddModuleScore
+# So convert this to a list
+Genes_to_regress = list(ListOfCollagenaseGenes1)
+
+# So we have our expression matrix and our list of genes to regress; so lets run the analysis similar to
+# the pipeline used in http://satijalab.org/seurat/cell_cycle_vignette.html#regress-out-cell-cycle-scores-during-data-scaling
+```
+
+# Seurat Analysis
+```{r}
+library(Seurat)
+library(cowplot)
+
+# Lets save the cell names of this dataset to be used to create the annotation file
+Names = colnames(ExpressionData2)
+# This has genes as rows (27966) and cells as columns (1417)
+# I created an annotation that has 1 column, CellType and 1417 rows. Each row matches each column in the
+# Combined data and describes each of these cells as either Young nor Old
+
+# The annotation file has rownames as sequential indexes. 
+# Reformat the annotation file to have the cell names from the combined as rownames
+# Add the Names from Combined data as another column in the annotation file
+Annotation1 = cbind(Annotation,'CellNames'= Names)
+# Sanity check
+head(Annotation1)
+# Now make this CellNames column as the row names
+rownames(Annotation1) = Annotation1$CellNames
+# Sanity check
+head(Annotation1)
+# Now drop the redundant CellNames column
+Annotation1 = Annotation1 %>% select(-CellNames)
+# Sanity check
+head(Annotation1)
+
+# Create Seurat Object
+
+# convert to a sparse matrix
+Combined = data.matrix(ExpressionData2)
+expression.data <- Matrix(Combined, sparse = T)
+New <- CreateSeuratObject(raw.data = expression.data, min.cells = 3, min.genes = 200, 
+    project = "10X_old")
+
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = New@data), value = TRUE)
+percent.mito <- Matrix::colSums(New@raw.data[mito.genes, ])/Matrix::colSums(New@raw.data)
+# Add percent.mito to the metadata
+New <- AddMetaData(object = New, metadata = percent.mito, col.name = "percent.mito")
+# Also add the cell annotation as part of the metadata
+New1 = AddMetaData(object=New,metadata = Annotation1)
+# This threw up a warning. Understand that warning. The plot is also kinda different from the plot from the tutorial;
+# The warning is that all cells have the same value of feature
+VlnPlot(object = New1, features.plot = c("nGene", "nUMI", "percent.mito"), nCol = 3)
+
+# We filter out cells that have unique gene counts over 2,500 or less than
+# 200 Note that low.thresholds and high.thresholds are used to define a
+# 'gate' -Inf and Inf should be used if you don't want a lower or upper
+# threshold.
+New <- FilterCells(object = New1, subset.names = c("nGene", "percent.mito"), 
+    low.thresholds = c(200, -Inf), high.thresholds = c(2500, 0.05))
+
+# Normalizing the data
+# After removing unwanted cells from the dataset, the next step is to normalize the data. By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the gene expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result.
+New <- NormalizeData(object = New, normalization.method = "LogNormalize", 
+    scale.factor = 10000)
+
+# Detection of variable genes across the single cells
+# Seurat calculates highly variable genes and focuses on these for downstream analysis. FindVariableGenes calculates the average expression and dispersion for each gene, places these genes into bins, and then calculates a z-score for dispersion within each bin. This helps control for the relationship between variability and average expression. This function is unchanged from (Macosko et al.), but new methods for variable gene expression identification are coming soon. We suggest that users set these parameters to mark visual outliers on the dispersion plot, but the exact parameter settings may vary based on the data type, heterogeneity in the sample, and normalization strategy. The parameters here identify ~2,000 variable genes, and represent typical parameter settings for UMI data that is normalized to a total of 1e4 molecules.
+New <- FindVariableGenes(object = New, mean.function = ExpMean, dispersion.function = LogVMR, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
+# Found 3117 variable genes
+length(x = New@var.genes)
+
+# Regress out the effect of UMI 
+New <- ScaleData(object = New, vars.to.regress = c("nUMI", "percent.mito"))
+# Sanity check
+New@scale.data[1:3,1:3]
+# Now instead of performing a linear dimension reduction on this , I would also like to regress out the
+# effects of the Collagenase dependent genes. 
+# So I will use the AddModuleScore to calculate a cluster score for each cell
+New_regressed = AddModuleScore(object=New,genes.list = Genes_to_regress ,ctrl.size = 10,enrich.name = 'Collagenase_dependent')
+# 
+# Now I have a new column called Collagenase_dependent1 which are the scores computed based on the genes
+# we want to regress out. For each gene, Seurat models the relationship between gene expression and computed scores. The scaled residuals of this model represent a ‘corrected’ expression matrix, that can be used downstream for dimensional reduction.
+New_regressed <- ScaleData(object = New_regressed, vars.to.regress = c('Collagenase_dependent1'), 
+    display.progress = FALSE)
+
+# Now we have the 'corrected' expression matrix.
+# Perform a linear dimension reduction on the scaled data
+New_reg <- RunPCA(object = New_regressed, pc.genes = New_regressed@var.genes, do.print = TRUE, pcs.print = 1:5, 
+    genes.print = 5)
+
+#Examine and visualize PCA results a few different ways
+PrintPCA(object = New_reg, pcs.print = 1:5, genes.print = 5, use.full = FALSE)
+VizPCA(object = New_reg, pcs.use = 1:2)
+PCAPlot(object = New_reg, dim.1 = 1, dim.2 = 2)
+PCHeatmap(object = New_reg, pc.use = 1:12, cells.use = 500, do.balanced = TRUE, label.columns = FALSE, use.full = FALSE)
+PCElbowPlot(object = New_reg)
+
+# Using the dimensions 1 to 10 to discover clusters with a resolution of 0.6. 
+# Increasing this resolution up to 1.2 will increase the number of clusters discovered
+# So this might be something I should explore later.
+New_reg <- FindClusters(object = New_reg, reduction.type = "pca", dims.use = 1:10, 
+    resolution = 0.6, print.output = 0, save.SNN = TRUE)
+# Now run the Tsne
+New_reg <- RunTSNE(object = New_reg, dims.use = 1:10, do.fast = TRUE)
+# Plot the Tsne
+TSNEPlot(object = New_reg,do.label=TRUE)
+
+
+# Lets switch the id to CellType so we can cluster by young or old
+expressionTsne_2 <- SetAllIdent(object = New_reg, id = "CellType")
+# Plot
+TSNEPlot(object = expressionTsne_2)
+
+# Now that we have dropped 33 early intermediate genes(ieg) and reanalyzed the data, how does it
+# square with the initial analysis without the removal of the 33 ieg. 
+
+# We did save the metadata of the first analysis, so lets read that in
+FirstAnalysis_Metadata = read.csv('MetaData_Combined.csv', row.names = 1)
+head(FirstAnalysis_Metadata)
+# Here, the column called res.0.6 contains the cluster assignment of each cell. So we can ask the
+# question if the same cells were clustered in the same group by this current analysis
+# Also in the first analysis, one of the biggest driver is the ieg typified by high Fos which
+# separates out cluster 1. So we should also track those and see how they change in this latest analysis
+# So create another column in the metadata called Fos_status and each cell will be either high or low
+# Simply put, all cells in cluster 1 will be denoted as high and the rest low
+FirstAnalysis_Metadata$Fos_Status = ifelse(FirstAnalysis_Metadata$res.0.6 == 1,'High','Low')
+
+# So now lets add the res.0.6 cluster assignment of the first analysis to this analysis. Also add
+# Fos_Status column
+# Before we do this, remember that for each analysis, we did some cell filtration steps which resulted
+# in some cells discarded. So first thing to check is if the same cells were retained in both analysis
+# Look at the cells retained for the current analsysi
+Current_Cells = rownames(expressionTsne_2@meta.data)
+length(Current_Cells)
+# 1379 cells retained. What about the first analysis?
+FirstAnalysis_Cells = rownames(FirstAnalysis_Metadata)
+length(FirstAnalysis_Cells)
+# 1379 cells retained. So the lenghts are same but are the contents same?
+difference = setdiff(Current_Cells,FirstAnalysis_Cells)
+difference1 = setdiff(FirstAnalysis_Cells,Current_Cells)
+# They seem to be the same
+# Do a manual inspection of the metadata for the current analysis to confirm
+write.csv(as.data.frame(expressionTsne_2@meta.data),'New_metadata.csv')
+# Open in excel and manually thumbed down the cell names and compare the cell names to the original metadata
+
+# Assuming its all same cells, then assign a new annotation column in the new analysis with the old clustering information
+expressionTsne_2@meta.data$OldClusterAssignment = FirstAnalysis_Metadata$res.0.6
+# Also, assign Fos status to the new analysis
+expressionTsne_2@meta.data$Fos_Status = FirstAnalysis_Metadata$Fos_Status
+# Sanity Check
+head(expressionTsne_2@meta.data)
+
+# Lets switch the id to OldClusterAssignmnet
+expressionTsne_3 <- SetAllIdent(object = expressionTsne_2, id = "OldClusterAssignment")
+# Plot
+TSNEPlot(object = expressionTsne_3)
+# Lets switch the id to the current cluster assignment
+expressionTsne_3 <- SetAllIdent(object = expressionTsne_2, id = "res.0.6")
+# Plot
+TSNEPlot(object = expressionTsne_3)
+# Lets switch the id to Fos Status
+expressionTsne_3 <- SetAllIdent(object = expressionTsne_2, id = "Fos_Status")
+# Plot
+TSNEPlot(object = expressionTsne_3)
+# Lets switch the id to Age status
+expressionTsne_3 <- SetAllIdent(object = expressionTsne_2, id = "CellType")
+# Plot
+TSNEPlot(object = expressionTsne_3)
+
+# find markers for every cluster compared to all remaining cells, report
+# only the positive ones
+New.markers <- FindAllMarkers(object = expressionTsne_3, only.pos = TRUE, min.pct = 0.25, 
+    thresh.use = 0.25)
+New.markers %>% group_by(cluster) %>% top_n(10, avg_logFC)
+
+# In summary, the clustering after removing the 33 early response genes still retained the same structure
+# of the clustering pre-removal. 
+
+# find all markers of cluster 0
+cluster0.markers <- FindMarkers(object = New_reg, ident.1 = 0, min.pct = 0.25)
+print(x = head(x = cluster0.markers, n = 10))
+# find all markers of cluster 1
+cluster1.markers <- FindMarkers(object = New_reg, ident.1 = 1, min.pct = 0.25)
+print(x = head(x = cluster1.markers, n = 10))
+# find all markers of cluster 2
+cluster2.markers <- FindMarkers(object = New_reg, ident.1 = 2, min.pct = 0.25)
+print(x = head(x = cluster2.markers, n = 10))
+# find all markers of cluster 3
+cluster3.markers <- FindMarkers(object = New_reg, ident.1 = 3, min.pct = 0.25)
+print(x = head(x = cluster3.markers, n = 10))
+cluster4.markers <- FindMarkers(object = New_reg, ident.1 = 4, min.pct = 0.25)
+print(x = head(x = cluster4.markers, n = 10))
+cluster5.markers <- FindMarkers(object = New_reg, ident.1 = 5, min.pct = 0.25)
+print(x = head(x = cluster5.markers, n = 10))
+cluster6.markers <- FindMarkers(object = New_reg, ident.1 = 6, min.pct = 0.25)
+print(x = head(x = cluster6.markers, n = 10))
+cluster7.markers <- FindMarkers(object = New_reg, ident.1 = 7, min.pct = 0.25)
+print(x = head(x = cluster7.markers, n = 10))
+
+# find markers for every cluster compared to all remaining cells, report
+# only the positive ones
+New.markers <- FindAllMarkers(object = New_reg, only.pos = TRUE, min.pct = 0.25, 
+    thresh.use = 0.25)
+New.markers %>% group_by(cluster) %>% top_n(5, avg_logFC)
+
+# Top markers plots
+# Cluster 0
+FeaturePlot(object = New_reg, features.plot = c("Gm8797", "Gm10076",'Abhd2','Gm10269','Chek2'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 1
+FeaturePlot(object = New_reg, features.plot = c("Car4", "Arl4a",'Cdkn1a','Adm','Ankrd37'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 2
+FeaturePlot(object = New_reg, features.plot = c("Igf1r", "Gm42418",'Eogt','Pdgfb','Esyt2'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 3
+FeaturePlot(object = New_reg, features.plot = c("Gkn3", "Glul",'Stmn2','Mgp','Clu'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 4
+FeaturePlot(object = New_reg, features.plot = c("Lcn2", "Lrg1",'Vcam1','Cd14','Ackr1'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 5
+FeaturePlot(object = New_reg, features.plot = c("Vtn", "Myl9",'Atp1a2','Acta2','Tagln','Pdgfrb'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 6
+FeaturePlot(object = New_reg, features.plot = c("Plvap",'Cd24a','Plpp1','Plpp3','Igfbp3'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+# Cluster 7
+FeaturePlot(object = New_reg, features.plot = c("H2-Eb1",'Cd74','H2-Ab1','H2-Aa','Lyz2'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+
+
+# Feature Plots for known markers
+FeaturePlot(object = New_reg, features.plot = c("Pecam1",'Cldn5','Efnb2','Dll4','Ephb4','Mfsd2a'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+FeaturePlot(object = New_reg, features.plot = c("Pecam1",'Cldn5',"Vcam1",'Icam1','Lrg1','Cd74'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+FeaturePlot(object = New_reg, features.plot = c("Pecam1",'Cldn5','Pvlap','Vwf','Ptprc','Cd14'), cols.use = c("grey", "blue"),reduction.use = "tsne")
+
+
+# Violin Plots for cluster markers
+VlnPlot(object = New_reg, features.plot = c("Gm8797", "Gm10076",'Abhd2','Gm10269','Chek2'))
+VlnPlot(object = New_reg, features.plot = c("Car4", "Arl4a",'Cdkn1a','Adm','Ankrd37'))
+VlnPlot(object = New_reg, features.plot = c("Igf1r", "Gm42418",'Eogt','Pdgfb','Esyt2'))
+VlnPlot(object = New_reg, features.plot = c("Gkn3", "Glul", 'Stmn2', 'Mgp', 'Clu'))
+VlnPlot(object = New_reg, features.plot =  c("Lcn2", "Lrg1",'Vcam1','Cd14','Ackr1'))
+VlnPlot(object = New_reg, features.plot = c("Vtn", "Myl9",'Atp1a2','Acta2','Tagln','Pdgfrb'))
+VlnPlot(object = New_reg, features.plot = c("Plvap",'Cd24a','Plpp1','Plpp3','Igfbp3'))
+VlnPlot(object = New_reg, features.plot = c("H2-Eb1",'Cd74','H2-Ab1','H2-Aa','Lyz2'))
+
+
+# Plot heatmap with the top 10 genes for each cluster
+top10 <- New.markers %>% group_by(cluster) %>% top_n(10, avg_logFC)
+# setting slim.col.label to TRUE will print just the cluster IDS instead of
+# every cell name
+DoHeatmap(object = New_reg, genes.use = top10$gene, slim.col.label = TRUE, remove.key = TRUE)
+```
+
+
+
+
+
+
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

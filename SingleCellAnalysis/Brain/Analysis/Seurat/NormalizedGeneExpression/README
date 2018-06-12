@@ -1,0 +1,3 @@
+Combined_Normalized_Seurat.csv : This file contains gene-cell matrix after filtration and normalization. After these pre processing I ended up with 1188 cells and 12176 genes
+
+Combined_Normalized_Scaled_Seurat : This file contains gene-cell matrix after filtration, normalization, getting variable genes and scaling the genes. After these pre processing I ended up with 1188 cells and 513 genes

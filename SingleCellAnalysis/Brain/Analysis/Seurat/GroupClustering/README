@@ -1,0 +1,4 @@
+Purpose:
+Clusters0 to Clusters3 identified by tsne (see HeatMap and tsne) were extracted and saved as individual clusters.
+
+Each of the clusters were then reclustered  individually using tsne and the results saved in the appropriate folders
