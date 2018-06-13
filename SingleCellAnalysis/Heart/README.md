@@ -13,5 +13,12 @@ Endothelial cells from either young and aged cardiac were isolated into single c
 ![](https://github.com/Emechebe/EndothelialCellTranscriptomeAnalysis/blob/master/SingleCellAnalysis/Heart/Analysis/Seurat/Old/Results/tsne.png?raw=true)
 ### Combined cluster analysis of young and aged endothelial cells
 ![](https://github.com/Emechebe/EndothelialCellTranscriptomeAnalysis/blob/master/SingleCellAnalysis/Heart/Analysis/Seurat/Combined/ResultsForCombined/tsne_clusters.png?raw=true)
-### Combined cluster analysis annotted by age
+### Combined cluster analysis annotated by age
 ![](https://github.com/Emechebe/EndothelialCellTranscriptomeAnalysis/blob/master/SingleCellAnalysis/Heart/Analysis/Seurat/Combined/ResultsForCombined/tsne_age.png?raw=true)
+
+
+## Figure summary from SWNE
+### Combined analysis of young and aged cardiac endothelial cells
+![](https://github.com/Emechebe/EndothelialCellTranscriptomeAnalysis/blob/master/SingleCellAnalysis/Heart/Analysis/SWNE/Results/tsne_cluster.png?raw=true)
+### Annotated by age
+![](https://github.com/Emechebe/EndothelialCellTranscriptomeAnalysis/blob/master/SingleCellAnalysis/Heart/Analysis/SWNE/Results/tsne_Age.png?raw=true)
